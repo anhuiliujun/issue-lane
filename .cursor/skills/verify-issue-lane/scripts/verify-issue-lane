@@ -42,7 +42,41 @@ require_verify_url() {
 
 port_pids() {
   local port="$1"
+  local from_proc
+  from_proc="$(proc_listener_pids "$port")"
+  if [[ -n "$from_proc" ]]; then
+    printf '%s\n' "$from_proc"
+    return 0
+  fi
   lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null || true
+}
+
+proc_listener_pids() {
+  local port="$1"
+  local hex inode tables=()
+  [[ -r /proc/net/tcp || -r /proc/net/tcp6 ]] || return 0
+  hex="$(printf '%04X' "$port")"
+  [[ -r /proc/net/tcp ]] && tables+=(/proc/net/tcp)
+  [[ -r /proc/net/tcp6 ]] && tables+=(/proc/net/tcp6)
+  while read -r inode; do
+    [[ -n "$inode" && "$inode" != "0" ]] || continue
+    socket_pids_for_inode "$inode"
+  done < <(awk -v port="$hex" 'NR > 1 {
+    n = split($2, parts, ":")
+    if (toupper(parts[n]) == port && $4 == "0A") print $10
+  }' "${tables[@]}")
+}
+
+socket_pids_for_inode() {
+  local inode="$1"
+  local fd pid target
+  for fd in /proc/[0-9]*/fd/*; do
+    [[ -e "$fd" ]] || continue
+    target="$(readlink "$fd" 2>/dev/null || true)"
+    [[ "$target" == "socket:[$inode]" ]] || continue
+    pid="${fd#/proc/}"
+    printf '%s\n' "${pid%%/*}"
+  done
 }
 
 is_in_tree() {
@@ -176,20 +210,27 @@ cmd_launch() {
   [[ "$seeded" == "8" ]] || die "Seed finished but issues count is ${seeded}, expected 8."
 
   : >"$RUN_DIR/next.log"
+  rm -f "$RUN_DIR/app.pid"
   perl -MPOSIX -e '
     use POSIX qw(setsid);
     chdir $ARGV[0] or die $!;
     $ENV{DATABASE_URL} = $ARGV[1];
+    my $log = $ARGV[2];
+    my $pidfile = $ARGV[3];
     open STDIN, "<", "/dev/null" or die $!;
-    open STDOUT, ">>", $ARGV[2] or die $!;
+    open STDOUT, ">>", $log or die $!;
     open STDERR, ">&STDOUT" or die $!;
     fork() and exit 0;
     setsid();
     fork() and exit 0;
-    exec @ARGV[3 .. $#ARGV] or die $!;
-  ' "$ROOT" "$DATABASE_URL" "$RUN_DIR/next.log" pnpm exec next dev --port "$APP_PORT" --hostname 127.0.0.1
+    open my $pf, ">", $pidfile or die $!;
+    print $pf "$$\n";
+    close $pf;
+    exec @ARGV[4 .. $#ARGV] or die $!;
+  ' "$ROOT" "$DATABASE_URL" "$RUN_DIR/next.log" "$RUN_DIR/app.pid" pnpm exec next dev --port "$APP_PORT" --hostname 127.0.0.1
+  wait_for_pidfile
   wait_for_app
-  record_app_pid
+  assert_app_listener
   printf 'bin=%s\npid=%s\nurl=%s\ndatabase=%s\npg_port=%s\n' \
     "$bin" "$(cat "$RUN_DIR/app.pid")" "$APP_URL" "$EXPECTED_DB" "$PG_PORT" \
     >"$RUN_DIR/instance.txt"
@@ -197,17 +238,24 @@ cmd_launch() {
   LAUNCHING=0
 }
 
-record_app_pid() {
-  local listener current parent
-  listener="$(port_pids "$APP_PORT" | head -n 1 || true)"
-  [[ -n "$listener" ]] || die "The login page answered but nothing is listening on port ${APP_PORT}."
-  current="$listener"
-  while true; do
-    parent="$(ps -o ppid= -p "$current" 2>/dev/null | tr -d " ")"
-    [[ -z "$parent" || "$parent" == "1" ]] && break
-    current="$parent"
+wait_for_pidfile() {
+  local attempt
+  for attempt in $(seq 1 50); do
+    [[ -s "$RUN_DIR/app.pid" ]] && return 0
+    sleep 0.1
   done
-  printf '%s\n' "$current" >"$RUN_DIR/app.pid"
+  die "The dev server did not record its pid. See ${RUN_DIR}/next.log."
+}
+
+assert_app_listener() {
+  local pid listener
+  pid="$(cat "$RUN_DIR/app.pid")"
+  ps -p "$pid" >/dev/null 2>&1 || die "Recorded app pid ${pid} exited before the port check."
+  listener="$(port_pids "$APP_PORT" | head -n 1 || true)"
+  [[ -n "$listener" ]] || die "The login page answered but no listener pid was found for port ${APP_PORT}."
+  if ! is_in_tree "$listener" "$pid" && [[ "$listener" != "$pid" ]]; then
+    die "Port ${APP_PORT} is owned by pid ${listener}, not the verification app pid ${pid}."
+  fi
 }
 
 cmd_doctor() {
