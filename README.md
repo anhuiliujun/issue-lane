@@ -30,3 +30,5 @@ Triage calls Vercel AI Gateway with `deepseek/deepseek-v4.1-flash`. If that requ
 The board does not need a model key. With no `AI_GATEWAY_API_KEY` and no `VERCEL_OIDC_TOKEN`, triage still runs and the first thought says it is using scripted rules. On Vercel, the injected `VERCEL_OIDC_TOKEN` is enough. Locally, `vercel link` and `vercel env pull`, or set `AI_GATEWAY_API_KEY`.
 
 A thought is written when the session is created, before the model or scripted turn, so it lands inside the 10 second window. If a session is still pending with no thought after 10 seconds, the issue page says it hasn't started and offers retry.
+
+Push test ran.
