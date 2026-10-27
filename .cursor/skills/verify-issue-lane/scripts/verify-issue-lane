@@ -1,0 +1,349 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
+RUN_DIR="/tmp/issue-lane-verify-run"
+EVIDENCE_DIR="/tmp/issue-lane-verify-evidence"
+APP_PORT=4173
+PG_PORT=54329
+APP_URL="http://127.0.0.1:${APP_PORT}"
+DATABASE_URL="postgresql://issue_lane:issue_lane@127.0.0.1:${PG_PORT}/issue_lane_verify"
+EXPECTED_DB="issue_lane_verify"
+export DATABASE_URL
+export PGPASSWORD=issue_lane
+
+die() {
+  echo "verify-issue-lane: $*" >&2
+  if [[ "${LAUNCHING:-}" == 1 ]]; then
+    LAUNCHING=0
+    cmd_cleanup || true
+  fi
+  exit 1
+}
+
+trap 'status=$?; if [[ "${LAUNCHING:-}" == 1 ]]; then LAUNCHING=0; echo "verify-issue-lane: launch failed. Stopping processes this run started." >&2; cmd_cleanup || true; fi; exit "$status"' ERR
+
+pg_bin() {
+  if [[ -x /Library/PostgreSQL/17/bin/initdb ]]; then
+    echo /Library/PostgreSQL/17/bin
+    return
+  fi
+  if command -v initdb >/dev/null 2>&1; then
+    dirname "$(command -v initdb)"
+    return
+  fi
+  die "PostgreSQL tools not found. Expected /Library/PostgreSQL/17/bin/initdb or initdb on PATH."
+}
+
+require_verify_url() {
+  [[ "$DATABASE_URL" == "postgresql://issue_lane:issue_lane@127.0.0.1:${PG_PORT}/${EXPECTED_DB}" ]] \
+    || die "Refusing to run. DATABASE_URL must be the isolated verification database, not issue_lane on port 5432."
+}
+
+port_pids() {
+  local port="$1"
+  local from_proc
+  from_proc="$(proc_listener_pids "$port")"
+  if [[ -n "$from_proc" ]]; then
+    printf '%s\n' "$from_proc"
+    return 0
+  fi
+  lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null || true
+}
+
+proc_listener_pids() {
+  local port="$1"
+  local hex inode tables=()
+  [[ -r /proc/net/tcp || -r /proc/net/tcp6 ]] || return 0
+  hex="$(printf '%04X' "$port")"
+  [[ -r /proc/net/tcp ]] && tables+=(/proc/net/tcp)
+  [[ -r /proc/net/tcp6 ]] && tables+=(/proc/net/tcp6)
+  while read -r inode; do
+    [[ -n "$inode" && "$inode" != "0" ]] || continue
+    socket_pids_for_inode "$inode"
+  done < <(awk -v port="$hex" 'NR > 1 {
+    n = split($2, parts, ":")
+    if (toupper(parts[n]) == port && $4 == "0A") print $10
+  }' "${tables[@]}")
+}
+
+socket_pids_for_inode() {
+  local inode="$1"
+  local fd pid target
+  for fd in /proc/[0-9]*/fd/*; do
+    [[ -e "$fd" ]] || continue
+    target="$(readlink "$fd" 2>/dev/null || true)"
+    [[ "$target" == "socket:[$inode]" ]] || continue
+    pid="${fd#/proc/}"
+    printf '%s\n' "${pid%%/*}"
+  done
+}
+
+is_in_tree() {
+  local node="$1"
+  local root="$2"
+  local current="$node"
+  while [[ -n "$current" && "$current" != "0" && "$current" != "1" ]]; do
+    [[ "$current" == "$root" ]] && return 0
+    current="$(ps -o ppid= -p "$current" 2>/dev/null | tr -d " " || true)"
+    [[ -z "$current" ]] && return 1
+  done
+  [[ "$current" == "$root" ]]
+}
+
+kill_tree() {
+  local pid="$1"
+  local child
+  [[ -n "$pid" ]] || return 0
+  if ! ps -p "$pid" >/dev/null 2>&1; then
+    return 0
+  fi
+  while IFS= read -r child; do
+    [[ -n "$child" ]] || continue
+    kill_tree "$child"
+  done < <(pgrep -P "$pid" || true)
+  kill "$pid" 2>/dev/null || true
+}
+
+wait_for_postgres() {
+  local bin="$1"
+  local attempt
+  for attempt in $(seq 1 50); do
+    if "$bin/pg_isready" -h 127.0.0.1 -p "$PG_PORT" -U issue_lane >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  die "Postgres did not accept connections on 127.0.0.1:${PG_PORT}. See ${RUN_DIR}/postgres.log."
+}
+
+wait_for_app() {
+  local attempt body
+  for attempt in $(seq 1 90); do
+    body="$(curl -fsS "$APP_URL/login" 2>/dev/null || true)"
+    if [[ "$body" == *"Issue Lane"* && "$body" == *"Sign in"* ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  die "Issue Lane did not serve the login page at ${APP_URL}/login. See ${RUN_DIR}/next.log."
+}
+
+psql_verify() {
+  require_verify_url
+  PGPASSWORD=issue_lane psql \
+    -h 127.0.0.1 \
+    -p "$PG_PORT" \
+    -U issue_lane \
+    -d "$EXPECTED_DB" \
+    -v ON_ERROR_STOP=1 \
+    "$@"
+}
+
+assert_database() {
+  local current
+  current="$(psql_verify -tAc "SELECT current_database()")"
+  [[ "$current" == "$EXPECTED_DB" ]] \
+    || die "Connected to ${current}, not ${EXPECTED_DB}. Refusing to continue."
+}
+
+cmd_launch() {
+  local bin listener
+  LAUNCHING=1
+  require_verify_url
+  if [[ -f "$RUN_DIR/app.pid" ]] && ps -p "$(cat "$RUN_DIR/app.pid")" >/dev/null 2>&1; then
+    die "A verification instance is already running (pid $(cat "$RUN_DIR/app.pid")). Only one instance is allowed. Run cleanup before launching again."
+  fi
+  listener="$(port_pids "$APP_PORT" | head -n 1 || true)"
+  if [[ -n "$listener" ]]; then
+    die "Port ${APP_PORT} is already in use by pid ${listener}. Refusing to start a second server."
+  fi
+  listener="$(port_pids "$PG_PORT" | head -n 1 || true)"
+  if [[ -n "$listener" ]]; then
+    die "Port ${PG_PORT} is already in use by pid ${listener}. Refusing to start a second database."
+  fi
+
+  bin="$(pg_bin)"
+  rm -rf "$RUN_DIR"
+  mkdir -p "$RUN_DIR"
+  chmod 700 "$RUN_DIR"
+  printf '%s\n' "issue_lane" > "$RUN_DIR/pwfile"
+  chmod 600 "$RUN_DIR/pwfile"
+
+  "$bin/initdb" \
+    -D "$RUN_DIR/pgdata" \
+    -U issue_lane \
+    --pwfile="$RUN_DIR/pwfile" \
+    --auth-host=scram-sha-256 \
+    --auth-local=trust \
+    --no-locale \
+    --no-sync \
+    >"$RUN_DIR/initdb.log"
+
+  "$bin/pg_ctl" \
+    -D "$RUN_DIR/pgdata" \
+    -l "$RUN_DIR/postgres.log" \
+    -o "-p ${PG_PORT} -k ${RUN_DIR} -c listen_addresses=127.0.0.1" \
+    start
+  wait_for_postgres "$bin"
+
+  PGPASSWORD=issue_lane "$bin/createdb" \
+    -h 127.0.0.1 \
+    -p "$PG_PORT" \
+    -U issue_lane \
+    "$EXPECTED_DB"
+  assert_database
+
+  if [[ ! -x "$ROOT/node_modules/.bin/next" ]]; then
+    (cd "$ROOT" && pnpm install)
+  fi
+
+  (
+    cd "$ROOT"
+    export DATABASE_URL
+    pnpm exec drizzle-kit migrate
+    pnpm exec tsx scripts/seed.ts
+  )
+  assert_database
+  local seeded
+  seeded="$(psql_verify -tAc "SELECT count(*) FROM issues")"
+  [[ "$seeded" == "8" ]] || die "Seed finished but issues count is ${seeded}, expected 8."
+
+  : >"$RUN_DIR/next.log"
+  rm -f "$RUN_DIR/app.pid"
+  perl -MPOSIX -e '
+    use POSIX qw(setsid);
+    chdir $ARGV[0] or die $!;
+    $ENV{DATABASE_URL} = $ARGV[1];
+    my $log = $ARGV[2];
+    my $pidfile = $ARGV[3];
+    open STDIN, "<", "/dev/null" or die $!;
+    open STDOUT, ">>", $log or die $!;
+    open STDERR, ">&STDOUT" or die $!;
+    fork() and exit 0;
+    setsid();
+    fork() and exit 0;
+    open my $pf, ">", $pidfile or die $!;
+    print $pf "$$\n";
+    close $pf;
+    exec @ARGV[4 .. $#ARGV] or die $!;
+  ' "$ROOT" "$DATABASE_URL" "$RUN_DIR/next.log" "$RUN_DIR/app.pid" pnpm exec next dev --port "$APP_PORT" --hostname 127.0.0.1
+  wait_for_pidfile
+  wait_for_app
+  assert_app_listener
+  printf 'bin=%s\npid=%s\nurl=%s\ndatabase=%s\npg_port=%s\n' \
+    "$bin" "$(cat "$RUN_DIR/app.pid")" "$APP_URL" "$EXPECTED_DB" "$PG_PORT" \
+    >"$RUN_DIR/instance.txt"
+  cmd_doctor
+  LAUNCHING=0
+}
+
+wait_for_pidfile() {
+  local attempt
+  for attempt in $(seq 1 50); do
+    [[ -s "$RUN_DIR/app.pid" ]] && return 0
+    sleep 0.1
+  done
+  die "The dev server did not record its pid. See ${RUN_DIR}/next.log."
+}
+
+assert_app_listener() {
+  local pid listener
+  pid="$(cat "$RUN_DIR/app.pid")"
+  ps -p "$pid" >/dev/null 2>&1 || die "Recorded app pid ${pid} exited before the port check."
+  listener="$(port_pids "$APP_PORT" | head -n 1 || true)"
+  [[ -n "$listener" ]] || die "The login page answered but no listener pid was found for port ${APP_PORT}."
+  if ! is_in_tree "$listener" "$pid" && [[ "$listener" != "$pid" ]]; then
+    die "Port ${APP_PORT} is owned by pid ${listener}, not the verification app pid ${pid}."
+  fi
+}
+
+cmd_doctor() {
+  local bin pid listener api_code api_body login_body demo_count
+  require_verify_url
+  [[ -f "$RUN_DIR/app.pid" ]] || die "No verification instance. Run launch first."
+  pid="$(cat "$RUN_DIR/app.pid")"
+  ps -p "$pid" >/dev/null 2>&1 || die "Recorded app pid ${pid} is not running."
+  bin="$(pg_bin)"
+  "$bin/pg_isready" -h 127.0.0.1 -p "$PG_PORT" -U issue_lane >/dev/null \
+    || die "Postgres is not accepting connections on 127.0.0.1:${PG_PORT}."
+  assert_database
+  demo_count="$(psql_verify -tAc "SELECT count(*) FROM users WHERE email = 'demo@issue-lane.app'")"
+  [[ "$demo_count" == "1" ]] || die "Demo user demo@issue-lane.app is missing. The database is not ready to drive."
+
+  listener="$(port_pids "$APP_PORT" | head -n 1 || true)"
+  [[ -n "$listener" ]] || die "Nothing is listening on port ${APP_PORT}."
+  if ! is_in_tree "$listener" "$pid" && [[ "$listener" != "$pid" ]]; then
+    die "Port ${APP_PORT} is owned by pid ${listener}, not the verification app pid ${pid}."
+  fi
+
+  login_body="$(curl -fsS "$APP_URL/login")"
+  [[ "$login_body" == *"Issue Lane"* && "$login_body" == *"Sign in"* ]] \
+    || die "Login page at ${APP_URL}/login is not the Issue Lane sign-in screen."
+
+  api_body="$(mktemp)"
+  api_code="$(curl -sS -o "$api_body" -w "%{http_code}" "$APP_URL/api/issues")"
+  [[ "$api_code" == "401" && "$(cat "$api_body")" == *"Sign in required."* ]] \
+    || die "Expected unsigned /api/issues to return 401 Sign in required, got ${api_code}."
+  rm -f "$api_body"
+
+  echo "url=${APP_URL}"
+  echo "database=${EXPECTED_DB}"
+  echo "pg_port=${PG_PORT}"
+  echo "app_pid=${pid}"
+  echo "demo_user=demo@issue-lane.app"
+  echo "doctor=ok"
+}
+
+cmd_sql() {
+  [[ -f "$RUN_DIR/pgdata/PG_VERSION" ]] || die "No verification database. Run launch first."
+  psql_verify "$@"
+}
+
+cmd_evidence() {
+  local feature="${1:-}"
+  [[ -n "$feature" ]] || die "Usage: verify-issue-lane evidence <feature-id>"
+  mkdir -p "${EVIDENCE_DIR}/${feature}"
+  echo "${EVIDENCE_DIR}/${feature}"
+}
+
+cmd_cleanup() {
+  local bin pid
+  if [[ -f "$RUN_DIR/app.pid" ]]; then
+    pid="$(cat "$RUN_DIR/app.pid")"
+    kill_tree "$pid"
+  fi
+  if [[ -d "$RUN_DIR/pgdata" ]]; then
+    bin="$(pg_bin)"
+    "$bin/pg_ctl" -D "$RUN_DIR/pgdata" stop -m fast >/dev/null 2>&1 || true
+  fi
+  rm -rf "$RUN_DIR"
+  echo "Stopped the verification app and database. Evidence remains in ${EVIDENCE_DIR}."
+}
+
+usage() {
+  cat <<EOF
+Usage: verify-issue-lane <launch|doctor|sql|evidence|cleanup>
+
+  launch    Create an empty Postgres cluster, migrate, seed, and start Next.js.
+  doctor    Read-only check that this instance is the one worth driving.
+  sql       Run psql against the verification database. Extra args pass to psql.
+  evidence  Print and create /tmp/issue-lane-verify-evidence/<feature-id>.
+  cleanup   Stop the processes this skill started. Does not delete evidence.
+EOF
+}
+
+main() {
+  local cmd="${1:-}"
+  shift || true
+  case "$cmd" in
+    launch) cmd_launch ;;
+    doctor) cmd_doctor ;;
+    sql) cmd_sql "$@" ;;
+    evidence) cmd_evidence "$@" ;;
+    cleanup) cmd_cleanup ;;
+    *) usage; exit 2 ;;
+  esac
+}
+
+main "$@"
