@@ -14,4 +14,6 @@ PostgreSQL 16 listens on `127.0.0.1:5432`. Database `issue_lane` is owned by rol
 
 Boot migrates that database and runs `pnpm db:seed` only when `demo@issue-lane.app` is absent. `pnpm db:setup` truncates and reseeds. The dev server is already `next dev` on port 3000. Sign in as `demo@issue-lane.app` / `lane-demo`.
 
+`pnpm typecheck` needs the route types from `pnpm exec next typegen` (also produced by `next dev` and `next build`). `LayoutProps` is generated, not imported.
+
 `initdb` and `pg_ctl` are on `PATH` for `.cursor/skills/verify-issue-lane`. That helper uses its own cluster on port 54329 and the app on port 4173, and it does not use the database on port 5432.
