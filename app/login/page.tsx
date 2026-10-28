@@ -6,7 +6,7 @@ export default function LoginPage() {
       <div className="flex w-full max-w-sm flex-col items-center gap-4">
         <div className="text-center">
           <h1 className="text-base font-medium">Issue Lane</h1>
-          <p className="mt-1 text-muted-foreground">One team, a board, and a triage agent.</p>
+          <p className="mt-1 text-muted-foreground">One team. Board, list, and projects.</p>
         </div>
         <LoginForm />
       </div>

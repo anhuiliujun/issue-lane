@@ -1,6 +1,6 @@
 # Issue Lane
 
-A single-team issue board with a triage agent. Statuses are rows on the team's workflow, not a fixed enum.
+A single-team issue board. Statuses are rows on the team's workflow, not a fixed enum.
 
 ## Demo login
 
@@ -19,16 +19,10 @@ pnpm db:setup
 pnpm dev
 ```
 
-Open http://localhost:3000 and sign in. The board and list are seeded. `LANE-6` has a clear triage goal. `LANE-7` is vague: assign Triage, answer the question, and the session should set a priority, leave Triage, create sub-issues, and complete.
+Open http://localhost:3000 and sign in. The sidebar opens the board, the list, and projects. Board and list show the same issues. Drag a card to another column to change its status, or change status from the list row. Open an issue to edit its title, description, status, priority, assignee, labels, and project, and to write a comment.
 
-Ctrl K or ⌘K opens the command menu: new issue, change status, change assignee. Select an issue on the board or list before the last two. Dragging a card to another column changes its status. The list can change status from the row.
+Press C to create an issue. Ctrl K or ⌘K opens the command menu for a new issue, or to change status and assignee on the selected issue. Filters for status, assignee, project, and priority stay in the address bar, so the board and the list share them.
 
-## Model
-
-Triage calls Vercel AI Gateway with `deepseek/deepseek-v4.1-flash`. If that request fails, the gateway tries `moonshotai/kimi-k2`.
-
-The board does not need a model key. With no `AI_GATEWAY_API_KEY` and no `VERCEL_OIDC_TOKEN`, triage still runs and the first thought says it is using scripted rules. On Vercel, the injected `VERCEL_OIDC_TOKEN` is enough. Locally, `vercel link` and `vercel env pull`, or set `AI_GATEWAY_API_KEY`.
-
-A thought is written when the session is created, before the model or scripted turn, so it lands inside the 10 second window. If a session is still pending with no thought after 10 seconds, the issue page says it hasn't started and offers retry.
+Agent tables remain in the database. This interface does not start a triage session.
 
 Push test ran.

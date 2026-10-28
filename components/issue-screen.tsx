@@ -2,11 +2,10 @@
 
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import ReactMarkdown from "react-markdown"
 import { toast } from "sonner"
 
-import { AgentPanel } from "@/components/agent-panel"
 import { PriorityMark, UserChip } from "@/components/marks"
 import { Button } from "@/components/ui/button"
 import {
@@ -15,49 +14,34 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Textarea } from "@/components/ui/textarea"
 import { useWorkspace } from "@/components/workspace-shell"
 import { priorityMeta, priorities } from "@/lib/domain"
-import type { IssueDetailDto, SessionDto, StatusDto, UserDto } from "@/lib/dto"
+import type { IssueDetailDto } from "@/lib/dto"
+import { cn } from "@/lib/utils"
 
-export function IssueScreen({
-  issue,
-  statuses,
-  users,
-}: {
-  issue: IssueDetailDto
-  statuses: StatusDto[]
-  users: UserDto[]
-}) {
+export function IssueScreen({ issue }: { issue: IssueDetailDto }) {
   const router = useRouter()
-  const { select } = useWorkspace()
-  const [session, setSession] = useState<SessionDto | null>(issue.session)
-  const [sessionSource, setSessionSource] = useState(issue.session)
-  if (sessionSource !== issue.session) {
-    setSessionSource(issue.session)
-    setSession(issue.session)
-  }
+  const { select, statuses, users, projects, labels } = useWorkspace()
+  const [titleDraft, setTitleDraft] = useState<string | null>(null)
+  const [descriptionDraft, setDescriptionDraft] = useState<string | null>(null)
+  const skipTitleBlur = useRef(false)
+  const skipDescriptionBlur = useRef(false)
   const [comment, setComment] = useState("")
   const [pending, setPending] = useState(false)
-  const seenSession = useRef<string | null>(null)
+  const [labelIds, setLabelIds] = useState(() => issue.labels.map((label) => label.id))
+  const [seenIssue, setSeenIssue] = useState(issue.updatedAt)
+  if (seenIssue !== issue.updatedAt) {
+    setSeenIssue(issue.updatedAt)
+    setTitleDraft(null)
+    setDescriptionDraft(null)
+    setLabelIds(issue.labels.map((label) => label.id))
+  }
 
   useEffect(() => {
     select({ id: issue.id, identifier: issue.identifier })
   }, [issue.id, issue.identifier, select])
-
-  useEffect(() => {
-    if (!session) return
-    const key = `${session.id}:${session.state}:${session.activities.length}`
-    if (seenSession.current === null) {
-      seenSession.current = key
-      return
-    }
-    if (seenSession.current === key) return
-    seenSession.current = key
-    if (session.state === "complete" || session.state === "awaitingInput" || session.state === "error") {
-      router.refresh()
-    }
-  }, [session, router])
 
   async function patch(body: Record<string, unknown>) {
     const response = await fetch(`/api/issues/${issue.id}`, {
@@ -68,21 +52,88 @@ export function IssueScreen({
     const payload = await response.json().catch(() => ({}))
     if (!response.ok) {
       toast.error(payload.error ?? "Could not update the issue.")
-      return
-    }
-    if (payload.sessionId) {
-      const sessionResponse = await fetch(`/api/sessions/${payload.sessionId}`)
-      const sessionPayload = await sessionResponse.json().catch(() => ({}))
-      if (sessionPayload.session) setSession(sessionPayload.session)
+      return false
     }
     router.refresh()
+    return true
+  }
+
+  async function commitTitle() {
+    if (skipTitleBlur.current) {
+      skipTitleBlur.current = false
+      return
+    }
+    if (titleDraft === null) return
+    const next = titleDraft.trim()
+    if (next.length === 0) {
+      toast.error("Give the issue a title.")
+      return
+    }
+    if (next === issue.title) {
+      setTitleDraft(null)
+      return
+    }
+    const saved = await patch({ title: next })
+    if (saved) setTitleDraft(null)
+  }
+
+  async function commitDescription() {
+    if (skipDescriptionBlur.current) {
+      skipDescriptionBlur.current = false
+      return
+    }
+    if (descriptionDraft === null) return
+    if (descriptionDraft === issue.description) {
+      setDescriptionDraft(null)
+      return
+    }
+    const saved = await patch({ description: descriptionDraft })
+    if (saved) setDescriptionDraft(null)
+  }
+
+  function toggleLabel(labelId: string) {
+    const next = labelIds.includes(labelId)
+      ? labelIds.filter((id) => id !== labelId)
+      : [...labelIds, labelId]
+    setLabelIds(next)
+    void patch({ labelIds: next }).then((saved) => {
+      if (!saved) setLabelIds(labelIds)
+    })
   }
 
   return (
     <div className="flex min-h-0 flex-1">
       <div className="min-w-0 flex-1 overflow-auto px-6 py-4">
         <p className="font-mono text-[12px] text-muted-foreground">{issue.identifier}</p>
-        <h1 className="mt-1 text-lg font-medium leading-snug">{issue.title}</h1>
+        {titleDraft === null ? (
+          <h1
+            className="mt-1 cursor-text text-lg font-medium leading-snug"
+            onClick={() => setTitleDraft(issue.title)}
+          >
+            {issue.title}
+          </h1>
+        ) : (
+          <input
+            aria-label="Title"
+            autoFocus
+            className="mt-1 w-full bg-transparent text-lg font-medium leading-snug outline-none"
+            value={titleDraft}
+            onChange={(event) => setTitleDraft(event.target.value)}
+            onBlur={() => void commitTitle()}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault()
+                event.currentTarget.blur()
+              }
+              if (event.key === "Escape") {
+                event.preventDefault()
+                skipTitleBlur.current = true
+                setTitleDraft(null)
+                event.currentTarget.blur()
+              }
+            }}
+          />
+        )}
         {issue.parent ? (
           <p className="mt-1 text-muted-foreground">
             Sub-issue of{" "}
@@ -91,11 +142,45 @@ export function IssueScreen({
             </Link>
           </p>
         ) : null}
-        <div className="markdown mt-4 max-w-3xl">
-          {issue.description ? (
-            <ReactMarkdown>{issue.description}</ReactMarkdown>
+        <div className="mt-4 max-w-3xl">
+          {descriptionDraft === null ? (
+            <div
+              className="markdown cursor-text"
+              onClick={() => setDescriptionDraft(issue.description)}
+            >
+              {issue.description ? (
+                <ReactMarkdown>{issue.description}</ReactMarkdown>
+              ) : (
+                <p className="text-muted-foreground">Add a description</p>
+              )}
+              <button
+                type="button"
+                className="mt-2 text-[12px] text-muted-foreground hover:text-foreground"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setDescriptionDraft(issue.description)
+                }}
+              >
+                Edit description
+              </button>
+            </div>
           ) : (
-            <p className="text-muted-foreground">No description.</p>
+            <Textarea
+              aria-label="Description"
+              autoFocus
+              value={descriptionDraft}
+              onChange={(event) => setDescriptionDraft(event.target.value)}
+              onBlur={() => void commitDescription()}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault()
+                  skipDescriptionBlur.current = true
+                  setDescriptionDraft(null)
+                }
+              }}
+              placeholder="Description"
+              rows={6}
+            />
           )}
         </div>
         {issue.children.length > 0 ? (
@@ -115,9 +200,6 @@ export function IssueScreen({
             </ul>
           </section>
         ) : null}
-        <div className="mt-6 max-w-3xl">
-          <AgentPanel session={session} onSession={setSession} />
-        </div>
         <section className="mt-6 max-w-3xl">
           <h2 className="font-medium">Comments</h2>
           <ul className="mt-2 flex flex-col gap-3">
@@ -147,18 +229,13 @@ export function IssueScreen({
                 return
               }
               setComment("")
-              if (payload.sessionId) {
-                const sessionResponse = await fetch(`/api/sessions/${payload.sessionId}`)
-                const sessionPayload = await sessionResponse.json().catch(() => ({}))
-                if (sessionPayload.session) setSession(sessionPayload.session)
-              }
               router.refresh()
             }}
           >
             <Textarea
               value={comment}
               onChange={(event) => setComment(event.target.value)}
-              placeholder="Comment. Mention @Triage to delegate."
+              placeholder="Write a comment"
               rows={3}
             />
             <Button type="submit" size="sm" variant="outline" disabled={pending || comment.trim().length === 0} className="self-start">
@@ -203,7 +280,7 @@ export function IssueScreen({
         <Property label="Assignee">
           <DropdownMenu>
             <DropdownMenuTrigger render={<Button variant="outline" size="sm" className="w-full justify-start" />}>
-              {issue.assignee ? issue.assignee.name : "Unassigned"}
+              {issue.assignee ? issue.assignee.name : "No assignee"}
             </DropdownMenuTrigger>
             <DropdownMenuContent>
               <DropdownMenuItem onClick={() => void patch({ assigneeId: null })}>No assignee</DropdownMenuItem>
@@ -216,16 +293,48 @@ export function IssueScreen({
           </DropdownMenu>
         </Property>
         <Property label="Labels">
-          <p>{issue.labels.map((label) => label.name).join(", ") || "None"}</p>
+          <Popover>
+            <PopoverTrigger render={<Button variant="outline" size="sm" className="w-full justify-start" />}>
+              <span className="truncate">
+                {labels.filter((label) => labelIds.includes(label.id)).map((label) => label.name).join(", ") || "No labels"}
+              </span>
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-56 gap-0.5 p-1">
+              {labels.map((label) => {
+                const selected = labelIds.includes(label.id)
+                return (
+                  <button
+                    key={label.id}
+                    type="button"
+                    aria-pressed={selected}
+                    className={cn(
+                      "flex h-8 w-full items-center gap-2 rounded-md px-2 text-left hover:bg-muted",
+                      selected && "bg-muted",
+                    )}
+                    onClick={() => toggleLabel(label.id)}
+                  >
+                    <span className="size-2 rounded-full" style={{ backgroundColor: label.color }} />
+                    {label.name}
+                  </button>
+                )
+              })}
+            </PopoverContent>
+          </Popover>
         </Property>
         <Property label="Project">
-          {issue.project ? (
-            <Link href={`/projects/${issue.project.id}`} className="underline">
-              {issue.project.name}
-            </Link>
-          ) : (
-            <p className="text-muted-foreground">None</p>
-          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger render={<Button variant="outline" size="sm" className="w-full justify-start" />}>
+              <span className="truncate">{issue.project?.name ?? "No project"}</span>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent>
+              <DropdownMenuItem onClick={() => void patch({ projectId: null })}>No project</DropdownMenuItem>
+              {projects.map((project) => (
+                <DropdownMenuItem key={project.id} onClick={() => void patch({ projectId: project.id })}>
+                  {project.name}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </Property>
       </aside>
     </div>
@@ -242,7 +351,7 @@ function formatCommentTime(iso: string) {
   }).format(new Date(iso))
 }
 
-function Property({ label, children }: { label: string; children: React.ReactNode }) {
+function Property({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="mb-3">
       <p className="mb-1 text-[11px] tracking-wide text-muted-foreground uppercase">{label}</p>

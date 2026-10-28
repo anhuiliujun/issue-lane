@@ -15,8 +15,10 @@ import {
   KanbanItemHandle,
   KanbanOverlay,
 } from "@/components/reui/kanban"
+import { useSharedIssueFilter } from "@/components/use-issue-filter"
 import { useWorkspace } from "@/components/workspace-shell"
 import type { IssueCardDto, StatusDto } from "@/lib/dto"
+import { isIssueFilterActive } from "@/lib/issue-filter"
 import { cn } from "@/lib/utils"
 
 export function Board({
@@ -27,6 +29,7 @@ export function Board({
   statuses: StatusDto[]
 }) {
   const { selected, select } = useWorkspace()
+  const { filter } = useSharedIssueFilter()
   const grouped = useMemo(() => groupByStatus(issues, statuses), [issues, statuses])
   const [columns, setColumns] = useState(grouped)
   const [columnSource, setColumnSource] = useState(grouped)
@@ -40,6 +43,7 @@ export function Board({
     return (
       <>
         <IssuesHeader view="board" />
+        {issues.length === 0 ? <EmptyIssues filtered={isIssueFilterActive(filter)} /> : null}
         <div className="min-h-0 flex-1 overflow-auto p-3">
           <div className="flex w-max min-w-full items-start gap-3">
             {statuses.map((status) => (
@@ -61,6 +65,7 @@ export function Board({
   return (
     <>
       <IssuesHeader view="board" />
+      {issues.length === 0 ? <EmptyIssues filtered={isIssueFilterActive(filter)} /> : null}
       <div className="min-h-0 flex-1 overflow-auto p-3">
         <Kanban
           value={columns}
@@ -123,6 +128,14 @@ const subscribeToNothing = () => () => {}
 const getIsMounted = () => true
 const getIsMountedOnServer = () => false
 
+function EmptyIssues({ filtered }: { filtered: boolean }) {
+  return (
+    <p className="px-3 pt-3 text-muted-foreground">
+      {filtered ? "No issues match these filters." : "No issues."}
+    </p>
+  )
+}
+
 function ColumnTitle({ status, count }: { status: StatusDto; count: number }) {
   return (
     <div className="mb-2 flex items-center gap-2 px-1">
@@ -161,7 +174,15 @@ function IssueCard({
         </Link>
         {issue.parentIdentifier ? <span>sub of {issue.parentIdentifier}</span> : null}
       </div>
-      <p className="mt-1 line-clamp-2 leading-snug">{issue.title}</p>
+      <p className="mt-1 line-clamp-2 leading-snug">
+        <Link
+          href={`/issues/${issue.identifier}`}
+          className="hover:underline"
+          onClick={(event) => event.stopPropagation()}
+        >
+          {issue.title}
+        </Link>
+      </p>
       <div className="mt-2 flex items-center justify-between gap-2">
         <span className="truncate text-[11px] text-muted-foreground">
           {issue.labels[0]?.name ?? issue.project?.name ?? ""}

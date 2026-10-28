@@ -13,9 +13,11 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { useSharedIssueFilter } from "@/components/use-issue-filter"
 import { useWorkspace } from "@/components/workspace-shell"
 import type { IssueCardDto, StatusDto } from "@/lib/dto"
 import { priorityMeta } from "@/lib/domain"
+import { isIssueFilterActive } from "@/lib/issue-filter"
 import { cn } from "@/lib/utils"
 
 export function IssueList({
@@ -27,12 +29,18 @@ export function IssueList({
 }) {
   const router = useRouter()
   const { selected, select } = useWorkspace()
+  const { filter } = useSharedIssueFilter()
   const statusById = new Map(statuses.map((status) => [status.id, status]))
 
   return (
     <>
       <IssuesHeader view="list" />
-      <div className="min-h-0 flex-1 overflow-auto">
+      {issues.length === 0 ? (
+        <p className="px-3 py-6 text-muted-foreground">
+          {isIssueFilterActive(filter) ? "No issues match these filters." : "No issues."}
+        </p>
+      ) : (
+        <div className="min-h-0 flex-1 overflow-auto">
         <table className="w-full border-collapse text-left">
           <thead className="sticky top-0 bg-background text-[11px] tracking-wide text-muted-foreground uppercase">
             <tr className="border-b">
@@ -67,12 +75,16 @@ export function IssueList({
                     </Link>
                   </td>
                   <td className="max-w-0 px-2">
-                    <div className="truncate">
+                    <Link
+                      href={`/issues/${issue.identifier}`}
+                      className="block truncate hover:underline"
+                      onClick={(event) => event.stopPropagation()}
+                    >
                       {issue.parentIdentifier ? (
-                        <span className="mr-1 text-muted-foreground">{issue.parentIdentifier}</span>
+                        <span className="mr-1 text-muted-foreground">{issue.parentIdentifier} </span>
                       ) : null}
                       {issue.title}
-                    </div>
+                    </Link>
                   </td>
                   <td className="px-2" onClick={(event) => event.stopPropagation()}>
                     <DropdownMenu>
@@ -112,7 +124,7 @@ export function IssueList({
                     {issue.assignee ? (
                       <UserChip name={issue.assignee.name} kind={issue.assignee.kind} />
                     ) : (
-                      <span className="text-muted-foreground">Unassigned</span>
+                      <span className="text-muted-foreground">No assignee</span>
                     )}
                   </td>
                   <td className="truncate px-2 text-muted-foreground">{issue.project?.name ?? ""}</td>
@@ -124,7 +136,8 @@ export function IssueList({
             })}
           </tbody>
         </table>
-      </div>
+        </div>
+      )}
     </>
   )
 }

@@ -10,7 +10,7 @@ The board shows the team's workflow as columns and opens an issue when its ident
 ## How to get to it (user POV)
 
 - Sign in. The app lands on `/board`.
-- Choose `Issues` in the sidebar.
+- Choose `Board` in the sidebar.
 - Choose `Board` in the issues header.
 
 ## Driving it with the Cursor browser
@@ -21,7 +21,7 @@ Preconditions:
 - Signed in as `demo@issue-lane.app`. If the sign-in screen is showing, follow [Sign in](./sign-in.md) through `sign-in-demo` first.
 - Seed data is intact. `LANE-6` is titled `Split account setup into three steps` and is in Triage. Confirm with `verify-issue-lane sql -c "SELECT number, title FROM issues WHERE number = 6"`.
 
-- **Sidebar entry.** From a signed-in page, choose `Issues`. Run `browser_click` the link named `Issues`. The URL is `http://127.0.0.1:4173/board` and the heading reads `Issues`.
+- **Sidebar entry.** From a signed-in page, choose `Board`. Run `browser_click` the link named `Board`. The URL is `http://127.0.0.1:4173/board` and the heading reads `Issues`.
 - **Header entry.** Choose `Board` if another issues view is showing. Run `browser_click` the link named `Board`. The link is current and the column headings are visible.
 - **Columns.** Read the board. Snapshot the page. Headings `Triage`, `Backlog`, `Todo`, `In Progress`, `Done`, and `Canceled` are all present. Triage contains link `LANE-6`. Done contains link `LANE-1`. Canceled contains link `LANE-5`.
 - **Open an issue.** Choose `LANE-6`. Run `browser_click` the link named `LANE-6`. The URL is `http://127.0.0.1:4173/issues/LANE-6` and the heading reads `Split account setup into three steps`.
