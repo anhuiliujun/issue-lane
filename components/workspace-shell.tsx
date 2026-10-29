@@ -28,7 +28,8 @@ import {
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { UserChip } from "@/components/marks"
-import type { StatusDto, UserDto } from "@/lib/dto"
+import { useSharedIssueFilter } from "@/components/use-issue-filter"
+import type { LabelDto, StatusDto, UserDto } from "@/lib/dto"
 import { cn } from "@/lib/utils"
 
 type SelectedIssue = { id: string; identifier: string }
@@ -38,6 +39,8 @@ type WorkspaceContextValue = {
   select: (issue: SelectedIssue | null) => void
   statuses: StatusDto[]
   users: UserDto[]
+  projects: Array<{ id: string; name: string }>
+  labels: LabelDto[]
 }
 
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null)
@@ -52,12 +55,16 @@ export function WorkspaceShell({
   team,
   statuses,
   users,
+  projects,
+  labels,
   currentUser,
   children,
 }: {
   team: { name: string; key: string }
   statuses: StatusDto[]
   users: UserDto[]
+  projects: Array<{ id: string; name: string }>
+  labels: LabelDto[]
   currentUser: { id: string; name: string }
   children: React.ReactNode
 }) {
@@ -73,22 +80,35 @@ export function WorkspaceShell({
   }
   const [createOpen, setCreateOpen] = useState(false)
   const select = useCallback((issue: SelectedIssue | null) => setSelected(issue), [])
+  const { href } = useSharedIssueFilter()
   const context = useMemo(
-    () => ({ selected, select, statuses, users }),
-    [selected, select, statuses, users],
+    () => ({ selected, select, statuses, users, projects, labels }),
+    [selected, select, statuses, users, projects, labels],
   )
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+      const metaK = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k"
+      if (metaK) {
         event.preventDefault()
         setCommandPage("root")
         setCommandOpen(true)
+        return
       }
+      if (event.repeat || event.metaKey || event.ctrlKey || event.altKey) return
+      if (event.key.toLowerCase() !== "c") return
+      if (commandOpen || createOpen) return
+      const target = event.target
+      if (target instanceof HTMLElement) {
+        const tag = target.tagName
+        if (target.isContentEditable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return
+      }
+      event.preventDefault()
+      setCreateOpen(true)
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [])
+  }, [commandOpen, createOpen])
 
   async function patchIssue(body: Record<string, unknown>) {
     if (!selected) return
@@ -100,14 +120,8 @@ export function WorkspaceShell({
     const payload = await response.json().catch(() => ({}))
     if (!response.ok) throw new Error(payload.error ?? "Could not update the issue.")
     setCommandOpen(false)
-    if (payload.sessionId) {
-      router.push(`/issues/${selected.identifier}`)
-    }
     router.refresh()
   }
-
-  const issuesActive = pathname.startsWith("/board") || pathname.startsWith("/list") || pathname.startsWith("/issues")
-  const projectsActive = pathname.startsWith("/projects")
 
   return (
     <WorkspaceContext.Provider value={context}>
@@ -117,9 +131,24 @@ export function WorkspaceShell({
             <p className="font-medium">{team.name}</p>
             <p className="text-[12px] text-muted-foreground">{team.key}</p>
           </div>
-          <nav className="flex flex-col gap-0.5 p-2">
-            <SideLink href="/board" active={issuesActive}>Issues</SideLink>
-            <SideLink href="/projects" active={projectsActive}>Projects</SideLink>
+          <nav className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto px-2 pb-2">
+            <div className="flex flex-col">
+              <SideLink href={href("/board")} active={pathname.startsWith("/board")}>Board</SideLink>
+              <SideLink href={href("/list")} active={pathname.startsWith("/list")}>List</SideLink>
+            </div>
+            <div className="flex flex-col">
+              <SideLink href="/projects" active={pathname === "/projects"}>Projects</SideLink>
+              {projects.map((project) => (
+                <SideLink
+                  key={project.id}
+                  href={`/projects/${project.id}`}
+                  active={pathname === `/projects/${project.id}`}
+                  nested
+                >
+                  {project.name}
+                </SideLink>
+              ))}
+            </div>
           </nav>
           <div className="mt-auto border-t p-2">
             <div className="flex items-center justify-between gap-2 px-2 py-1.5">
@@ -162,6 +191,7 @@ export function WorkspaceShell({
                   }}
                 >
                   New issue
+                  <span className="ml-auto text-muted-foreground" aria-hidden="true">C</span>
                 </CommandItem>
                 <CommandItem
                   disabled={!selected}
@@ -215,7 +245,6 @@ export function WorkspaceShell({
                     }}
                   >
                     {user.name}
-                    {user.kind === "agent" ? <span className="text-muted-foreground">Agent</span> : null}
                   </CommandItem>
                 ))}
               </CommandGroup>
@@ -237,12 +266,23 @@ export function WorkspaceShell({
   )
 }
 
-function SideLink({ href, active, children }: { href: string; active: boolean; children: string }) {
+function SideLink({
+  href,
+  active,
+  nested = false,
+  children,
+}: {
+  href: string
+  active: boolean
+  nested?: boolean
+  children: string
+}) {
   return (
     <Link
       href={href}
       className={cn(
-        "rounded-md px-2 py-1.5",
+        "flex h-8 min-w-0 items-center truncate rounded-md px-2",
+        nested && "pl-4",
         active ? "bg-sidebar-accent font-medium" : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground",
       )}
       aria-current={active ? "page" : undefined}

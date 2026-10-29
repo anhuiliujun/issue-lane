@@ -24,7 +24,7 @@ Preconditions:
 - **Open the dialog.** Choose `New issue`. Run `browser_click` the option named `New issue`. A heading `New issue` appears, with text `It starts in Triage.`, a textbox named `Issue title`, and a button `Create issue`.
 - **Enter the issue.** Fill the title and description. Run `browser_fill` on the `Issue title` textbox with value `Verify lane checklist`, then `browser_fill` on the `Description, in Markdown` textbox with value `Created from the command menu`. The `Create issue` button is enabled.
 - **Create.** Choose `Create issue`. Run `browser_click` the button named `Create issue`. The button reads `Creating…`, then the URL matches `/issues/LANE-`, the heading reads `Verify lane checklist`, and the description text `Created from the command menu` is on the page.
-- **Confirm on the board.** The issue page has no `Board` link. Choose `Issues`. Run `browser_click` the link named `Issues`. The URL is `http://127.0.0.1:4173/board`. Under the `Triage` heading there is a link for the new identifier and the title `Verify lane checklist`.
+- **Confirm on the board.** Choose `Board` in the sidebar. Run `browser_click` the link named `Board`. The URL is `http://127.0.0.1:4173/board`. Under the `Triage` heading there is a link for the new identifier and the title `Verify lane checklist`.
 - **Confirm the row.** Read the stored issue. Run `verify-issue-lane sql -c "SELECT number, title, description FROM issues WHERE title = 'Verify lane checklist'"`. One row has that title and description.
 - **Proof.** Save the issue-page snapshot as `issue.aria.txt`, the screenshot as `issue.png`, and the SQL output as `row.txt` under `verify-issue-lane evidence create-issue`. Write `entry=command-menu` in `notes.txt`.
 

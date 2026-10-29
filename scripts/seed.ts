@@ -94,7 +94,7 @@ async function main() {
   const [project] = await db.insert(projects).values({
     teamId: team.id,
     name: "Interview slice",
-    summary: "One team, a board, and a triage agent for the demo.",
+    summary: "The demo project for the Lane team.",
     status: "started",
     leadId: alex.id,
     targetDate: "2026-11-14",

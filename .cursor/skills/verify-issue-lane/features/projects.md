@@ -26,4 +26,4 @@ Preconditions:
 ## Gotchas
 
 - The project URL uses the project id, not a slug. Assert the name on the page and the `/projects/` prefix, then match the id from the address to the SQL id if the id matters.
-- `Issues` stays available in the sidebar. Landing on the board instead means the Projects link was not the control that was clicked.
+- `Board` stays available in the sidebar. Landing on the board instead means the Projects link was not the control that was clicked. The sidebar also lists `Interview slice`. Either that link or the one on the projects page opens the project.

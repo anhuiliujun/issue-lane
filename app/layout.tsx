@@ -12,7 +12,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Issue Lane",
-  description: "One team, a board, and a triage agent.",
+  description: "One team. Board, list, and projects.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

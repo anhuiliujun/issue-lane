@@ -1,11 +1,18 @@
 import { NextResponse } from "next/server"
 import type { NextRequest } from "next/server"
 
+import { findUserBySessionToken, sessionCookie } from "@/lib/auth-session"
 import { SESSION_COOKIE } from "@/lib/domain"
 
-export function proxy(request: NextRequest) {
+function clearSession(response: NextResponse) {
+  response.cookies.set(SESSION_COOKIE, "", { ...sessionCookie, maxAge: 0 })
+  return response
+}
+
+export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl
-  const loggedIn = Boolean(request.cookies.get(SESSION_COOKIE)?.value)
+  const token = request.cookies.get(SESSION_COOKIE)?.value
+  const loggedIn = token ? Boolean(await findUserBySessionToken(token)) : false
 
   if (pathname.startsWith("/api/auth")) {
     return NextResponse.next()
@@ -13,19 +20,24 @@ export function proxy(request: NextRequest) {
 
   if (pathname.startsWith("/api/")) {
     if (!loggedIn) {
-      return NextResponse.json({ error: "Sign in required." }, { status: 401 })
+      const response = NextResponse.json({ error: "Sign in required." }, { status: 401 })
+      if (token) clearSession(response)
+      return response
     }
     return NextResponse.next()
   }
 
   if (pathname === "/login") {
     if (loggedIn) return NextResponse.redirect(new URL("/board", request.url))
-    return NextResponse.next()
+    const response = NextResponse.next()
+    if (token) clearSession(response)
+    return response
   }
 
   if (!loggedIn) {
-    const login = new URL("/login", request.url)
-    return NextResponse.redirect(login)
+    const response = NextResponse.redirect(new URL("/login", request.url))
+    if (token) clearSession(response)
+    return response
   }
 
   return NextResponse.next()

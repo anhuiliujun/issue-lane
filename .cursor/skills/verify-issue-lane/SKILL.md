@@ -75,12 +75,12 @@ If the dialog named `Command menu` does not appear, repeat with `ctrlKey: true` 
 Stable handles:
 
 - Sign-in: heading `Issue Lane`, textbox `Email`, textbox `Password`, button `Sign in`.
-- Shell: link `Issues`, link `Projects`, button `Sign out`, team name `Lane`.
+- Shell: link `Board`, link `List`, link `Projects`, button `Sign out`, team name `Lane`.
 - Issues header: heading `Issues`, link `Board`, link `List`.
 - Board columns are headings: `Triage`, `Backlog`, `Todo`, `In Progress`, `Done`, `Canceled`. Issue identifiers are links such as `LANE-6`.
 - Command menu, when open: combobox `Type a command…`, option `New issue`, option `Change status Select an issue`, option `Change assignee Select an issue` (the status and assignee names include `Select an issue` until an issue is selected). The heading `Command menu` stays in the tree while the menu is closed, so the combobox is the sign it is open.
 - New issue dialog: heading `New issue`, textbox `Issue title`, textbox `Description, in Markdown`, button `Create issue`, button `Close`. The button name is `Creating…` while the request is in flight. The issue URL arrives after the dialog closes.
-- A board card is a button whose name includes the priority, identifier, and title, plus a separate link named with the identifier. The issue page has no `Board` link. Choose `Issues` in the sidebar to return to the board.
+- A board card is a button whose name includes the priority, identifier, and title, plus a separate link named with the identifier. Choose `Board` in the sidebar to return to the board from an issue. The header also has a `Board` link while the board or list is open.
 - List status controls are buttons whose name is the status, inside the row that contains that issue's identifier link.
 - Projects: heading `Projects`, link `Interview slice`.
 
